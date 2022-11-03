@@ -35,6 +35,14 @@ config X86_64
 	select ARCH_HAS_ELFCORE_COMPAT
 	select ZONE_DMA32
 
+config DEBUG_SDFP
+       bool "Run time syscall doublefetch prevention"
+       depends on 64BIT
+       default n
+       help
+        Checks for double fetching in system calls. Syslog if one
+        is seen.
+
 config FORCE_DYNAMIC_FTRACE
 	def_bool y
 	depends on X86_32
