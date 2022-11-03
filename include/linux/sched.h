@@ -958,7 +958,9 @@ struct task_struct {
 
 	pid_t				pid;
 	pid_t				tgid;
-
+#ifdef CONFIG_DEBUG_SDFP
+        struct sdfp_node *sdfp;
+#endif        
 #ifdef CONFIG_STACKPROTECTOR
 	/* Canary value for the -fstack-protector GCC feature: */
 	unsigned long			stack_canary;

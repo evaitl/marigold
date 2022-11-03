@@ -4,6 +4,8 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/sched.h>
+#include <linux/slab.h>
 
 static bool sdfp_kill; 
 static DECLARE_BITMAP(sdfp_ignored_calls,NR_syscalls) = {0};
@@ -60,3 +62,14 @@ void sdfp_check(void *to, const void __user *from,
 #endif
 }
 EXPORT_SYMBOL(sdfp_check);
+void sdfp_clear(void){
+        struct sdfp_node *cn=current->sdfp;
+        current->sdfp=0;
+        while(cn){
+                struct sdfp_node *nn=cn->next;
+                kfree(cn->buf);
+                kfree(cn);
+                cn=nn;
+        }
+}
+EXPORT_SYMBOL(sdfp_clear);
