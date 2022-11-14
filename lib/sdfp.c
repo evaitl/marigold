@@ -54,6 +54,61 @@ static void merge_sdfp(uint8_t *to, struct sdfp_node *cn,
 	cn->start = new_start;
 	cn->end = new_end;
 }
+/**
+   Merge any overlapping sdfp list nodes. 
+ */
+static void coalesce(void){
+        struct sdfp_node *cn=current->sdfp_list;
+        struct sdfp_node *nn=0;
+        if(cn){
+                nn=cn->next;
+        }
+        while(cn && nn){
+                if ((cn->start >= nn->end) ||(nn->start >= cn->end)){
+                        cn=nn;
+                        nn=cn->next;
+                        continue;
+                }else{
+                        uintptr_t start= min(cn->start, nn->start);
+                        uintptr_t end=max(cn->end,nn->end);
+                        unsigned new_size= end-start;
+                        uint8_t *buf=kmalloc(new_size, GFP_KERNEL);
+                        memcpy(&buf[cn->start - start], &cn->buf[0], cn->end-cn->start);
+                        memcpy(&buf[nn->start - start], &nn->buf[0],nn->end-nn->start);
+                        kfree(nn->buf);
+                        cn->next=nn->next;
+                        kfree(nn);
+                        kfree(cn->buf);
+                        cn->buf=buf;
+                        cn->start=start;
+                        cn->end=end;
+                }
+        }
+}
+/**
+   Merging already happened, so if there is an overlap it is fully
+   contained in a `sdfp_node` buf.
+ */
+static void df_check(uint8_t *to, uintptr_t start, uintptr_t end){
+        struct sdfp_node *cn=current->sdfp_list;
+        while(cn){
+                if ( (end<=cn->start) || (start>=cn->end)){ // no overlap with this cn
+                        cn=cn->next;
+                        continue; 
+                }
+                if(memcmp(to, &cn->buf[start-cn->start], end-start)==0){
+                        break;  // Double fetch attack not seen.
+                }
+                memcpy(to,&cn->buf[cn->start-start],end-start);
+                printk(KERN_ALERT "SDFP double fetch protected in pid %d syscall %d",
+                       current->pid, syscall_get_nr(current,current_pt_regs()));
+                if(sdfp_kill_doublefetch){
+                        printk(KERN_ALERT "SDFP: Killing pid %d",current->pid);
+                }
+
+        }
+}
+
 /*
  * Return true if there was a node overlap with `to` buf.
  */
@@ -62,33 +117,19 @@ static bool overlap_check(uint8_t *to, struct sdfp_node *cn,
 {
 	// Compare the overlapped bytes.
 	const int nr = syscall_get_nr(current, current_pt_regs());
-	// Double Fetch Detected?
-	const bool dfd =
-                memcmp(&to[min((unsigned)(start-cn->start),0u)],
-                       &cn->buf[min(0u,(unsigned)(cn->start-start))],
-                       min(cn->end-start,end-cn->start)) != 0;
-
 	if ((start > cn->end) || (end < cn->start))
 		return false;
 	// Some kind of multi-fetch happened.
-
 	if (!test_and_set_bit(nr, sdfp_multiread_reported))
 		printk(KERN_ALERT "SDFP multiread seen in pid %d syscall %d",
 		       current->pid, nr);
-	if (start < cn->start || end > cn->end)
+	if (start < cn->start || end > cn->end){
 		merge_sdfp(to, cn, start, end); // We gotta reallocate the cn->buf.
-	if (dfd) {
-		memcpy(to, &cn->buf[start - cn->start], end - start);
-		printk(KERN_ALERT "SDFP double fetch protected in pid %d, syscall %d",
-		       current->pid, nr);
-		if (sdfp_kill_doublefetch) {
-			printk(KERN_ALERT "SDFP: Killing pid %d", current->pid);
-			kill_pid(find_vpid(current->pid), SIGKILL, 1);
-		}
-	}
+                coalesce();
+        }
+        df_check(to,start,end);
 	return true;
 }
-
 /**
  * sdfp_check - Check for double fetch attacks.
  * @to: Result location
@@ -125,9 +166,7 @@ void sdfp_check(void *to, const void __user *from,
 		merged = overlap_check(to, cn, start, end);
 		cn = cn->next;
 	}
-        if(merged){
-                // TODO: Walk sdfp_list and merge any nodes that need to be merged. 
-        }else {
+        if(!merged){
 		// No
 		nn = kmalloc(sizeof(struct sdfp_node), GFP_KERNEL);
 		if (!nn)
